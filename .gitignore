@@ -1,0 +1,25 @@
+# Build / packaging output
+build/
+dist/
+*.spec.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Bundled FFmpeg binaries (large; supplied per-machine or downloaded in CI)
+bin/ffmpeg
+bin/ffprobe
+bin/ffplay
+bin/*.exe
+bin/__MACOSX/
+
+# Generated test outputs
+samples/*_converted.*

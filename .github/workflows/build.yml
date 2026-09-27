@@ -1,0 +1,67 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: VideoConverter-windows
+          - os: macos-latest
+            artifact: VideoConverter-macos
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # PyInstaller cannot cross-compile, so each runner fetches static FFmpeg
+      # binaries for its own OS into bin/ (named as the app expects).
+      - name: Fetch FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_tmp -Force
+          $bin = Get-ChildItem -Path ffmpeg_tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          Copy-Item (Join-Path $bin.DirectoryName "ffmpeg.exe") bin\ffmpeg.exe -Force
+          Copy-Item (Join-Path $bin.DirectoryName "ffprobe.exe") bin\ffprobe.exe -Force
+
+      - name: Fetch FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl -L "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip" -o ffmpeg.zip
+          curl -L "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip" -o ffprobe.zip
+          unzip -o ffmpeg.zip -d bin
+          unzip -o ffprobe.zip -d bin
+          chmod +x bin/ffmpeg bin/ffprobe
+
+      - name: Smoke test (conversion engine)
+        run: python tests/smoke_test.py
+
+      - name: Build application
+        run: python build.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          if-no-files-found: error
