@@ -24,6 +24,7 @@ class Profile:
     audio_args: List[str] = field(default_factory=list)
     copy: bool = False                 # True => stream copy (remux)
     faststart: bool = False            # add +faststart for MP4/MOV
+    audio_only: bool = False           # True => drop video, extract audio
 
 
 # --- Registries ------------------------------------------------------------
@@ -33,6 +34,7 @@ FORMATS = [
     OutputFormat("MOV", "mov", "MOV video (*.mov)"),
     OutputFormat("MKV", "mkv", "Matroska video (*.mkv)"),
     OutputFormat("WebM", "webm", "WebM video (*.webm)"),
+    OutputFormat("MP3", "mp3", "MP3 audio (*.mp3)"),
 ]
 
 
@@ -92,6 +94,13 @@ PROFILES = [
             "-pix_fmt", "yuv422p10le",
         ],
         audio_args=["-c:a", "pcm_s16le"],
+    ),
+    Profile(
+        key="mp3_audio",
+        label="Extract MP3 audio (drop video)",
+        containers=["MP3"],
+        audio_args=["-c:a", "libmp3lame", "-q:a", "2"],
+        audio_only=True,
     ),
 ]
 
@@ -158,6 +167,10 @@ def build_arguments(job: ConversionJob):
 
     if profile.copy:
         arguments += ["-map", "0", "-c", "copy"]
+    elif profile.audio_only:
+        # Drop video; take the first audio stream and encode it.
+        arguments += ["-vn", "-map", "0:a:0"]
+        arguments += list(profile.audio_args)
     else:
         arguments += ["-map", "0:v:0", "-map", "0:a?"]
         arguments += list(profile.video_args)
