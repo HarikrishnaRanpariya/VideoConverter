@@ -154,6 +154,60 @@ The spec bundles the platform's FFmpeg binaries and the Qt Multimedia plugins
 needed for preview. UPX compression is applied on Windows only. Build on the
 target OS — PyInstaller does not cross-compile.
 
+### Step-by-step for a new developer
+
+Do this on the OS you want to build for (Windows builds the `.exe`, macOS builds
+the `.app`).
+
+**Windows** (Command Prompt / PowerShell):
+
+```bat
+:: 1. Get the code
+git clone https://github.com/HarikrishnaRanpariya/VideoConverter.git
+cd VideoConverter
+
+:: 2. Add FFmpeg (see "FFmpeg setup" above): put ffmpeg.exe and ffprobe.exe in bin\
+
+:: 3. Create the environment and install dependencies
+python -m venv venv
+venv\Scripts\activate
+python -m pip install -r requirements.txt
+
+:: 4. (optional) run from source to test
+python app.py
+
+:: 5. Build the application
+pyinstaller VideoConverter.spec
+::   -> dist\VideoConverter\VideoConverter.exe
+```
+
+**macOS** (Terminal):
+
+```bash
+# 1. Get the code
+git clone https://github.com/HarikrishnaRanpariya/VideoConverter.git
+cd VideoConverter
+
+# 2. Add FFmpeg (see "FFmpeg setup" above): put ffmpeg and ffprobe in bin/
+chmod +x bin/ffmpeg bin/ffprobe
+xattr -dr com.apple.quarantine bin/ffmpeg bin/ffprobe
+
+# 3. Create the environment and install dependencies
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# 4. (optional) run from source to test
+python app.py
+
+# 5. Build the application
+pyinstaller VideoConverter.spec
+#   -> dist/VideoConverter.app   (launch with: open dist/VideoConverter.app)
+```
+
+> `python build.py` does steps 4–5 with a prerequisite check, and prints where
+> the artifact was written.
+
 ### Build helpers
 
 - `python build.py` — verifies prerequisites, then builds for the current OS.
