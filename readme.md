@@ -8,6 +8,29 @@ It never encodes video itself.
 
 _Copyright © 2026 Harikrishna Ranpariya._
 
+## App at a glance
+
+![Amrut Audio Video Converter — main window](assets/screenshot.png)
+
+1. **Input video** — click **Browse** to pick a local file to convert.
+2. **Video URL** — paste a link, click **Download** (choose a folder), and convert
+   it. **Update downloader** keeps the download engine (yt-dlp) current.
+3. **Output folder** — **Browse** to choose where results are saved; the filename
+   is auto-filled from the input and format.
+4. **Input / Output preview** — play the source (left) and the finished result
+   (right); use Play/Pause and the seek slider.
+5. **Mode** — the conversion recipe: Remux, H.264/AAC, H.265/AAC, VP9/Opus,
+   ProRes/PCM, or Extract MP3 audio.
+6. **Format** — the output container (MP4/MOV/MKV/WebM/MP3); only valid choices
+   for the selected mode are shown.
+7. **Resolution** — keep the original size or downscale (2160p → 480p).
+8. **Trim (optional)** — tick to convert only a selected range; capture Start/End
+   from the input preview.
+9. **Convert / Cancel** — start or stop the conversion.
+10. **FFmpeg log** — live progress and the raw FFmpeg messages.
+
+See the [User Guide](docs/USER_GUIDE.md) for step-by-step instructions.
+
 ## Features
 
 - Convert to **MP4, MOV, MKV, WebM**.

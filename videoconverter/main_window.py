@@ -79,7 +79,7 @@ class MainWindow(QMainWindow):
         input_button.clicked.connect(self.select_input)
 
         self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("Select the output file")
+        self.output_edit.setPlaceholderText("Choose an output folder (filename auto-filled)")
         output_button = QPushButton("Browse")
         output_button.clicked.connect(self.select_output)
 
