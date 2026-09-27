@@ -132,6 +132,41 @@ def formats_for_profile(profile_key):
     return [f for f in FORMATS if f.name in profile.containers]
 
 
+# Codecs that can be stream-copied (remuxed) into each container.
+_REMUX_VIDEO = {
+    "MP4": {"h264", "hevc", "av1", "mpeg4", "mjpeg"},
+    "MOV": {"h264", "hevc", "prores", "mjpeg", "dnxhd"},
+    "MKV": {"h264", "hevc", "av1", "vp9", "vp8", "prores", "mjpeg", "mpeg4"},
+    "WebM": {"vp8", "vp9", "av1"},
+}
+_REMUX_AUDIO = {
+    "MP4": {"aac", "ac3", "mp3", "alac", "eac3"},
+    "MOV": {"aac", "pcm_s16le", "pcm_s24le", "alac", "ac3"},
+    "MKV": {"aac", "ac3", "eac3", "mp3", "opus", "vorbis", "flac", "pcm_s16le"},
+    "WebM": {"opus", "vorbis"},
+}
+
+
+def remux_incompatibilities(format_name, video_codec, audio_codec):
+    """Return human-readable reasons a remux (stream copy) would fail.
+
+    Empty list means the codecs are copyable into the target container.
+    """
+    problems = []
+    allowed_v = _REMUX_VIDEO.get(format_name)
+    if allowed_v is not None and video_codec:
+        if video_codec.lower() not in allowed_v:
+            problems.append(f"video codec '{video_codec}'")
+
+    allowed_a = _REMUX_AUDIO.get(format_name)
+    if allowed_a is not None and audio_codec:
+        if audio_codec.lower() not in allowed_a:
+            problems.append(f"audio codec '{audio_codec}'")
+
+    return problems
+
+
+
 # --- Job + argument builder ------------------------------------------------
 
 @dataclass

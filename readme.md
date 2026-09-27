@@ -1,21 +1,30 @@
-# Video Converter
+# Amrut Audio Video Converter
 
-A Windows desktop application for converting, previewing, and trimming video
-files. It is a GUI front end for **FFmpeg** built with **PySide6 (Qt)** — the app
-inspects your video with `ffprobe`, builds the correct FFmpeg command, runs it in
-the background, and shows live progress. It never encodes video itself.
+A Windows and macOS desktop application for converting, previewing, trimming, and
+downloading video — and extracting audio. It is a GUI front end for **FFmpeg**
+built with **PySide6 (Qt)**: the app inspects your video with `ffprobe`, builds
+the correct FFmpeg command, runs it in the background, and shows live progress.
+It never encodes video itself.
+
+_Copyright © 2026 Harikrishna Ranpariya._
 
 ## Features
 
 - Convert to **MP4, MOV, MKV, WebM**.
 - Conversion modes: **Remux** (lossless copy), **H.264/AAC**, **H.265/AAC**,
   **VP9/Opus**, **ProRes/PCM**.
+- **Extract MP3 audio** (drop the video track).
 - **In-app video preview** of both the input and the converted output.
+- **Download from a URL** (YouTube and many sites) via a self-updating yt-dlp
+  (**Update downloader** button), then convert.
 - **Trim**: convert only a selected portion of the video, capturing start/end
   from the preview playhead.
 - Optional **downscaling** (2160p → 480p).
+- **Folder pickers** for output and downloads (defaults: Windows Videos /
+  macOS Movies), with last-used folder remembered.
+- **Remux safety check**: blocks incompatible copies and offers a one-click
+  “Convert to MP4 (H.264/AAC)” instead.
 - Live progress bar, full FFmpeg log, and cancel support.
-- Only offers **valid format/codec combinations** (see [docs/FORMATS.md](docs/FORMATS.md)).
 
 ## Documentation
 
@@ -24,6 +33,7 @@ the background, and shows live progress. It never encodes video itself.
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | How to use the application. |
 | [docs/FORMATS.md](docs/FORMATS.md) | Container/codec architecture and valid combinations. |
 | [docs/ALGORITHMS.md](docs/ALGORITHMS.md) | How remux and transcode conversions work. |
+| [docs/URL_DOWNLOAD.md](docs/URL_DOWNLOAD.md) | URL download → convert flow and architecture. |
 | [.github/skills/video-conversion/](.github/skills/video-conversion/SKILL.md) | Agent skill: deep FFmpeg/codec knowledge for extending the app. |
 
 ## Architecture
@@ -34,12 +44,13 @@ The app is a thin Qt GUI over separated, testable modules.
 app.py                      # Entry point: QApplication + MainWindow
 videoconverter/
 ├── ffmpeg.py               # Tool discovery + ffprobe inspection (no Qt)
-├── profiles.py             # FORMATS/PROFILES registries + argument builder (no Qt)
+├── profiles.py             # FORMATS/PROFILES + argument builder + remux checks (no Qt)
 ├── conversion.py           # ConversionController: QProcess + progress parsing
+├── downloader.py           # yt-dlp URL download + self-update (QThread workers)
 ├── preview.py              # VideoPreview widget (Qt Multimedia)
 └── main_window.py          # Layout and wiring
 bin/                        # Bundled ffmpeg / ffprobe (+ optional ffplay)
-docs/                       # User + format + algorithm documentation
+docs/                       # User + format + algorithm + download documentation
 ```
 
 Design principles:
@@ -66,6 +77,39 @@ for extension points.
 > Homebrew/system libraries. On macOS a Homebrew `ffmpeg` depends on Homebrew
 > dylibs and may not run when copied into another machine's app bundle.
 
+## FFmpeg setup (required before running or building)
+
+The repository does **not** ship FFmpeg. Download the static binaries for your OS
+and place them in the `bin/` folder with these exact names:
+
+```
+bin/
+├── ffmpeg      (ffmpeg.exe  on Windows)
+└── ffprobe     (ffprobe.exe on Windows)
+```
+
+**Windows** — download a static build, e.g. gyan.dev
+(`ffmpeg-release-essentials.zip`) or BtbN. From its `bin` folder copy
+`ffmpeg.exe` and `ffprobe.exe` into this project's `bin\`.
+
+**macOS (Apple Silicon / arm64)** — download arm64 static builds from
+osxexperts.net, then:
+
+```bash
+unzip ffmpeg*.zip -d bin && unzip ffprobe*.zip -d bin
+chmod +x bin/ffmpeg bin/ffprobe
+xattr -dr com.apple.quarantine bin/ffmpeg bin/ffprobe   # clear Gatekeeper flag
+```
+
+**macOS (Intel / x86_64)** — use evermeet.cx static builds; same placement/steps.
+
+**Linux** — download static builds from johnvansickle.com; place `ffmpeg`/`ffprobe`
+in `bin/` and `chmod +x` them.
+
+Both Windows (`.exe`) and macOS/Linux (no extension) binaries may coexist in
+`bin/`; the app and the PyInstaller spec pick the right ones per OS. CI downloads
+these automatically — this manual step is only for local runs/builds.
+
 ## Run from source
 
 Windows:
@@ -86,8 +130,8 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Place the matching FFmpeg binaries in `bin/` first (see Requirements). On
-macOS/Linux mark them executable: `chmod +x bin/ffmpeg bin/ffprobe`.
+Place the matching FFmpeg binaries in `bin/` first (see **FFmpeg setup** above).
+On macOS/Linux mark them executable: `chmod +x bin/ffmpeg bin/ffprobe`.
 
 ## Build a native application
 

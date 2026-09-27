@@ -36,6 +36,13 @@ binaries = _existing(_binary_pairs)
 # UPX is reliable on Windows but frequently corrupts macOS binaries; disable off-Windows.
 use_upx = is_windows
 
+# Optional app icon (drop your own): assets/icon.ico (Windows) / assets/icon.icns (macOS).
+_icon_candidate = "assets/icon.ico" if is_windows else "assets/icon.icns"
+icon_file = _icon_candidate if os.path.isfile(_icon_candidate) else None
+
+# Windows executable metadata (product name, copyright, version).
+version_file = "version_info.txt" if (is_windows and os.path.isfile("version_info.txt")) else None
+
 
 a = Analysis(
     ['app.py'],
@@ -71,6 +78,8 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=icon_file,
+    version=version_file,
 )
 coll = COLLECT(
     exe,
@@ -87,13 +96,14 @@ if is_macos:
     app = BUNDLE(
         coll,
         name='VideoConverter.app',
-        icon=None,
-        bundle_identifier='com.videoconverter.app',
+        icon=icon_file,
+        bundle_identifier='com.harikrishnaranpariya.amrut',
         info_plist={
-            'CFBundleName': 'Video Converter',
-            'CFBundleDisplayName': 'Video Converter',
+            'CFBundleName': 'Amrut Audio Video Converter',
+            'CFBundleDisplayName': 'Amrut Audio Video Converter',
             'CFBundleShortVersionString': '2.0.0',
             'CFBundleVersion': '2.0.0',
             'NSHighResolutionCapable': True,
+            'NSHumanReadableCopyright': '© 2026 Harikrishna Ranpariya',
         },
     )

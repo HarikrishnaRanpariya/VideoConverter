@@ -90,6 +90,18 @@ FFmpeg is run with `-progress pipe:1 -nostats`. The app reads the `out_time`
 value it prints, divides by the target duration, and updates the progress bar.
 `progress=end` marks completion.
 
+## Extracting audio (MP3)
+
+The **Extract MP3 audio** mode drops the video entirely and encodes just the
+sound to an MP3:
+
+```
+-i input.mp4 -vn -map 0:a:0 -c:a libmp3lame -q:a 2 output.mp3
+```
+
+`-vn` removes video; `-q:a 2` is high-quality VBR (~190 kbps). Trimming works,
+so you can export just a clip's audio. (Fails if the source has no audio.)
+
 ## Decision summary
 
 ```

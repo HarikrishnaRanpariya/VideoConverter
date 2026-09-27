@@ -53,8 +53,14 @@ Run FFmpeg with `-progress pipe:1 -nostats`. Parse `key=value` lines on stdout; 
 `out_time` (or `out_time_ms`) ÷ target duration × 100 for the percent. `progress=end`
 signals completion.
 
+## 7. Audio extraction
+Drop the video and encode a single audio stream into an audio container:
+`-vn -map 0:a:0 -c:a libmp3lame -q:a 2` (MP3). No scaling, no faststart; trim
+(`-ss`/`-to`) still applies. Fails if the input has no audio stream.
+
 ## Decision guide
 1. Same codecs already legal in target container? → **remux** (`-c copy`).
 2. Only audio incompatible? → copy video, transcode audio.
 3. Need specific size? → **two-pass bitrate**. Otherwise → **CRF**.
 4. Editing target? → ProRes/PCM in MOV. Delivery? → H.264/AAC MP4 with faststart.
+5. Only want the sound? → **audio extraction** (`-vn` + audio encoder).

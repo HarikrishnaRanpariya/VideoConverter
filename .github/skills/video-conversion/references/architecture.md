@@ -7,12 +7,13 @@ package so UI, media logic, and FFmpeg orchestration stay separate.
 ```
 app.py                      # Entry point: creates QApplication + MainWindow
 videoconverter/
-├── __init__.py
+├── __init__.py             # App name, version, author, copyright metadata
 ├── ffmpeg.py               # Tool discovery (ffmpeg/ffprobe/ffplay), probe, duration
-├── profiles.py             # FORMATS + PROFILES registries, argument builder (incl. trim)
+├── profiles.py             # FORMATS + PROFILES, argument builder (trim/audio), remux checks
 ├── conversion.py           # ConversionController: runs FFmpeg via QProcess, emits signals
+├── downloader.py           # yt-dlp binary fetch/update + DownloadWorker/UpdateWorker (QThread)
 ├── preview.py              # VideoPreview widget (QMediaPlayer + QVideoWidget)
-└── main_window.py          # MainWindow: wires widgets, input/output preview, trim UI
+└── main_window.py          # MainWindow: wires widgets, previews, trim, folder pickers
 ```
 
 ## Responsibilities
@@ -31,11 +32,16 @@ videoconverter/
 
 ## Extension points
 - **New codec profile** → append to `PROFILES` in `profiles.py`.
-- **New container** → append to `FORMATS`; set which profiles it allows.
+- **New container** → append to `FORMATS`; set which profiles it allows; update
+  `_REMUX_VIDEO`/`_REMUX_AUDIO` so the remux pre-flight guard stays correct.
+- **Audio extraction** → add an `audio_only=True` profile; `build_arguments`
+  emits `-vn -map 0:a:0` and skips scaling/faststart.
 - **New option (bitrate, scale, fps)** → add a field to the `ConversionJob` dataclass
   and honor it in `build_arguments()`; add a widget in `main_window.py`.
 - **Trim** → `ConversionJob.start`/`.end` drive `-ss`/`-to`; duration for progress is
   `end - start` when a range is set.
+- **URL download** → `downloader.py`; `DownloadWorker` runs the standalone yt-dlp
+  binary, `UpdateWorker` refreshes it. Both run on a `QThread` from `main_window.py`.
 
 ## Data flow
 `MainWindow` gathers UI state → builds a `ConversionJob` → `build_arguments(job)` →

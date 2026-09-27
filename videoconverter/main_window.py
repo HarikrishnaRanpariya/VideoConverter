@@ -1,8 +1,9 @@
 """Main application window: wiring, layout, previews, and trim controls."""
 
 import os
+import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,20 +24,30 @@ from PySide6.QtWidgets import (
 
 from . import ffmpeg, profiles
 from .conversion import ConversionController, time_to_seconds
+from .downloader import DownloadWorker, UpdateWorker
 from .preview import VideoPreview
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Video Converter")
+        self.setWindowTitle("Amrut Audio Video Converter")
         self.resize(1080, 760)
 
         self.input_duration = 0.0
+        self.input_video_codec = None
+        self.input_audio_codec = None
         self.controller = ConversionController(self)
         self.controller.progress.connect(self._on_progress)
         self.controller.log.connect(self._append_log)
         self.controller.finished.connect(self._on_finished)
+
+        self._download_thread = None
+        self._download_worker = None
+        self._update_thread = None
+        self._update_worker = None
+        self._last_output_dir = None
+        self._last_download_dir = None
 
         self._build_ui()
         self._check_tools()
@@ -72,12 +83,40 @@ class MainWindow(QMainWindow):
         output_button = QPushButton("Browse")
         output_button.clicked.connect(self.select_output)
 
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText("or paste a video URL to download")
+        self.download_button = QPushButton("Download")
+        self.download_button.clicked.connect(self.start_download)
+        self.update_button = QPushButton("Update downloader")
+        self.update_button.setToolTip(
+            "Fetch the latest yt-dlp so downloads keep working as sites change."
+        )
+        self.update_button.clicked.connect(self.start_update_downloader)
+
+        url_row = QHBoxLayout()
+        url_row.addWidget(self.download_button)
+        url_row.addWidget(self.update_button)
+        url_buttons = QWidget()
+        url_buttons.setLayout(url_row)
+        url_buttons.setContentsMargins(0, 0, 0, 0)
+
+        disclaimer = QLabel(
+            "Downloading may violate a site's Terms of Service or copyright. "
+            "Only download content you have the right to use."
+        )
+        disclaimer.setWordWrap(True)
+        disclaimer.setStyleSheet("color: gray; font-size: 11px;")
+
         grid.addWidget(QLabel("Input video:"), 0, 0)
         grid.addWidget(self.input_edit, 0, 1)
         grid.addWidget(input_button, 0, 2)
-        grid.addWidget(QLabel("Output file:"), 1, 0)
-        grid.addWidget(self.output_edit, 1, 1)
-        grid.addWidget(output_button, 1, 2)
+        grid.addWidget(QLabel("Video URL:"), 1, 0)
+        grid.addWidget(self.url_edit, 1, 1)
+        grid.addWidget(url_buttons, 1, 2)
+        grid.addWidget(disclaimer, 2, 1, 1, 2)
+        grid.addWidget(QLabel("Output folder:"), 3, 0)
+        grid.addWidget(self.output_edit, 3, 1)
+        grid.addWidget(output_button, 3, 2)
         return grid
 
     def _build_previews(self):
@@ -205,6 +244,16 @@ class MainWindow(QMainWindow):
     def _current_format_name(self):
         return self.format_combo.currentData()
 
+    def _select_profile(self, key):
+        index = self.profile_combo.findData(key)
+        if index >= 0:
+            self.profile_combo.setCurrentIndex(index)
+
+    def _select_format(self, name):
+        index = self.format_combo.findData(name)
+        if index >= 0:
+            self.format_combo.setCurrentIndex(index)
+
     def _refresh_formats_for_profile(self):
         profile_key = self._current_profile_key()
         allowed = profiles.formats_for_profile(profile_key)
@@ -240,6 +289,20 @@ class MainWindow(QMainWindow):
         ):
             widget.setEnabled(enabled)
 
+    def _default_output_dir(self):
+        """A sensible default output folder for the current OS."""
+        home = os.path.expanduser("~")
+        if os.name == "nt":
+            candidates = [os.path.join(home, "Videos"), os.path.join(home, "Downloads")]
+        elif sys.platform == "darwin":
+            candidates = [os.path.join(home, "Movies"), os.path.join(home, "Downloads")]
+        else:
+            candidates = [os.path.join(home, "Videos"), os.path.join(home, "Downloads")]
+        for candidate in candidates:
+            if os.path.isdir(candidate):
+                return candidate
+        return home
+
     def select_input(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -247,15 +310,19 @@ class MainWindow(QMainWindow):
             "",
             "Video files (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;All files (*.*)",
         )
-        if not file_path:
-            return
+        if file_path:
+            self._load_input_file(file_path)
 
+    def _load_input_file(self, file_path):
+        """Set a file as the conversion input: preview, probe, default output."""
         self.input_edit.setText(file_path)
         self.input_preview.load(file_path)
 
         try:
             info = ffmpeg.probe_media(file_path)
             self.input_duration = info["duration"]
+            self.input_video_codec = info.get("video_codec")
+            self.input_audio_codec = info.get("audio_codec")
             self._append_log(
                 "Input: "
                 f"{info.get('video_codec')} / {info.get('audio_codec')} "
@@ -270,34 +337,134 @@ class MainWindow(QMainWindow):
                 )
         except Exception as error:
             self.input_duration = 0.0
+            self.input_video_codec = None
+            self.input_audio_codec = None
             self._append_log(f"Could not read input details: {error}")
 
         fmt = profiles.format_by_name(self._current_format_name())
         if fmt:
-            directory = os.path.dirname(file_path)
+            if self._last_output_dir and os.path.isdir(self._last_output_dir):
+                directory = self._last_output_dir
+            else:
+                directory = os.path.dirname(file_path)
             stem = os.path.splitext(os.path.basename(file_path))[0]
             self.output_edit.setText(
                 os.path.join(directory, f"{stem}_converted.{fmt.extension}")
             )
 
-    def select_output(self):
-        fmt = profiles.format_by_name(self._current_format_name())
-        file_filter = fmt.file_filter if fmt else "All files (*.*)"
-
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Select output file",
-            self.output_edit.text(),
-            file_filter,
-        )
-        if not file_path:
+    def start_download(self):
+        url = self.url_edit.text().strip()
+        if not url:
+            QMessageBox.warning(self, "No URL", "Paste a video URL to download.")
+            return
+        if self._download_thread is not None:
             return
 
-        if fmt:
-            expected = f".{fmt.extension}"
-            if not file_path.lower().endswith(expected):
-                file_path += expected
-        self.output_edit.setText(file_path)
+        start_dir = self._last_download_dir or self._default_output_dir()
+        dest_dir = QFileDialog.getExistingDirectory(
+            self, "Choose download folder", start_dir
+        )
+        if not dest_dir:
+            return
+        self._last_download_dir = dest_dir
+
+        self.download_button.setEnabled(False)
+        self.convert_button.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Downloading…")
+
+        self._download_thread = QThread(self)
+        self._download_worker = DownloadWorker(url, dest_dir)
+        self._download_worker.moveToThread(self._download_thread)
+        self._download_thread.started.connect(self._download_worker.run)
+        self._download_worker.progress.connect(self._on_progress)
+        self._download_worker.log.connect(self._append_log)
+        self._download_worker.finished.connect(self._on_download_finished)
+        self._download_thread.start()
+
+    def _on_download_finished(self, success, result):
+        if self._download_thread is not None:
+            self._download_thread.quit()
+            self._download_thread.wait()
+            self._download_thread = None
+            self._download_worker = None
+
+        self.download_button.setEnabled(True)
+        self.convert_button.setEnabled(True)
+
+        if success:
+            self.status_label.setText("Download complete")
+            self._load_input_file(result)
+        else:
+            self.status_label.setText("Download failed")
+            self._append_log(f"Download error: {result}")
+            QMessageBox.critical(
+                self,
+                "Download failed",
+                f"Could not download the video.\n\n{result}",
+            )
+
+    def start_update_downloader(self):
+        if self._update_thread is not None:
+            return
+        self.update_button.setEnabled(False)
+        self.status_label.setText("Updating downloader…")
+
+        self._update_thread = QThread(self)
+        self._update_worker = UpdateWorker()
+        self._update_worker.moveToThread(self._update_thread)
+        self._update_thread.started.connect(self._update_worker.run)
+        self._update_worker.log.connect(self._append_log)
+        self._update_worker.finished.connect(self._on_update_finished)
+        self._update_thread.start()
+
+    def _on_update_finished(self, success, result):
+        if self._update_thread is not None:
+            self._update_thread.quit()
+            self._update_thread.wait()
+            self._update_thread = None
+            self._update_worker = None
+
+        self.update_button.setEnabled(True)
+        if success:
+            self.status_label.setText(f"Downloader updated (yt-dlp {result})")
+            self._append_log(f"yt-dlp updated to {result}")
+        else:
+            self.status_label.setText("Downloader update failed")
+            self._append_log(f"Update error: {result}")
+            QMessageBox.critical(
+                self,
+                "Update failed",
+                f"Could not update yt-dlp.\n\n{result}",
+            )
+
+    def select_output(self):
+        start = (
+            self._last_output_dir
+            or os.path.dirname(self.output_edit.text().strip())
+            or self._default_output_dir()
+        )
+        directory = QFileDialog.getExistingDirectory(
+            self, "Choose output folder", start
+        )
+        if not directory:
+            return
+
+        self._last_output_dir = directory
+        fmt = profiles.format_by_name(self._current_format_name())
+        extension = fmt.extension if fmt else "mp4"
+
+        current = self.output_edit.text().strip()
+        if current:
+            stem = os.path.splitext(os.path.basename(current))[0]
+        else:
+            input_path = self.input_edit.text().strip()
+            base = os.path.splitext(os.path.basename(input_path))[0]
+            stem = f"{base}_converted" if base else "output"
+
+        self.output_edit.setText(
+            os.path.join(directory, f"{stem}.{extension}")
+        )
 
     def _target_duration(self, job):
         if not job.has_range or self.input_duration <= 0:
@@ -338,6 +505,36 @@ class MainWindow(QMainWindow):
             )
             return
 
+        profile = profiles.profile_by_key(self._current_profile_key())
+        format_name = self._current_format_name()
+        if profile is not None and profile.copy:
+            problems = profiles.remux_incompatibilities(
+                format_name, self.input_video_codec, self.input_audio_codec
+            )
+            if problems:
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setWindowTitle("Remux not possible")
+                box.setText(
+                    f"The {', '.join(problems)} cannot be copied into a "
+                    f"{format_name} file."
+                )
+                box.setInformativeText(
+                    "Convert to a compatible MP4 (H.264 / AAC) instead, or "
+                    "cancel and choose settings yourself."
+                )
+                convert_button = box.addButton(
+                    "Convert to MP4 (H.264/AAC)",
+                    QMessageBox.ButtonRole.AcceptRole,
+                )
+                box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+                box.exec()
+                if box.clickedButton() is not convert_button:
+                    return
+                self._select_profile("h264")
+                self._select_format("MP4")
+
+        output_file = self.output_edit.text().strip()
         job = profiles.ConversionJob(
             input_file=input_file,
             output_file=output_file,

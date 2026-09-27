@@ -13,6 +13,7 @@ Agent-facing reference. For the user-facing version see [../../../../docs/FORMAT
 | AVI | `.avi` | MJPEG, MPEG-4 ASP | MP3, PCM | Legacy; avoid for modern codecs. |
 | MPEG-TS | `.ts` | H.264, H.265 | AAC, AC-3 | Streaming/broadcast, resilient to cuts. |
 | GIF | `.gif` | palette (256 colors) | none | Animation only; use palettegen for quality. |
+| MP3 | `.mp3` | (none – audio only) | MP3 | Audio-extraction target; `-vn -map 0:a:0`. |
 
 ## Video codecs
 

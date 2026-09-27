@@ -76,3 +76,4 @@ app prevents it.
 | Open web video | VP9 / Opus | WebM |
 | Edit in a video editor | ProRes / PCM | MOV |
 | Just change the wrapper | Remux | MP4 / MOV / MKV |
+| Just the audio | Extract MP3 audio | MP3 |
