@@ -41,6 +41,7 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_tmp -Force
           $bin = Get-ChildItem -Path ffmpeg_tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          New-Item -ItemType Directory -Path bin -Force | Out-Null
           Copy-Item (Join-Path $bin.DirectoryName "ffmpeg.exe") bin\ffmpeg.exe -Force
           Copy-Item (Join-Path $bin.DirectoryName "ffprobe.exe") bin\ffprobe.exe -Force
 
