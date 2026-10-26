@@ -26,6 +26,7 @@ If a warning says **FFmpeg not found**, make sure `ffmpeg` and `ffprobe`
 | **Update downloader** | Refreshes the download engine (yt-dlp) so URLs keep working. |
 | **Output folder** | Where the result is saved. **Browse** picks a folder; the filename is auto-filled. |
 | **Input / Output preview** | Play the source and the finished result inside the app. |
+| **Audio waveform** | Graph under each preview showing the audio loudness over time (see §8). |
 | **Mode** | The conversion recipe (see §3). |
 | **Format** | The output container (MP4, MOV, MKV, WebM, MP3). |
 | **Resolution** | Keep original size or downscale (1080p, 720p, …). |
@@ -95,6 +96,13 @@ click **Update downloader** to fetch the latest engine, then try again.
 - The **left** preview shows your input; the **right** preview loads the
   converted file automatically when done.
 - Use **Play/Pause** and drag the slider to seek.
+- Below each video is an **audio waveform** of the file's first audio track.
+  The height is the peak level on a decibel scale (top/bottom edge = 0 dBFS,
+  center line = −60 dB or quieter), so the input and output graphs can be
+  compared directly — e.g. to spot clipped, missing, or much quieter audio.
+  The red line is the playhead; the lighter part has already played.
+  Click or drag on the waveform to seek.
+- Files without audio show **No audio track** in the waveform area.
 
 > If a preview shows "Video preview is unavailable", the Qt Multimedia plugins
 > are missing from the build — conversion still works.

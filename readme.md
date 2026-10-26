@@ -18,7 +18,8 @@ _Copyright © 2026 Harikrishna Ranpariya._
 3. **Output folder** — **Browse** to choose where results are saved; the filename
    is auto-filled from the input and format.
 4. **Input / Output preview** — play the source (left) and the finished result
-   (right); use Play/Pause and the seek slider.
+   (right); use Play/Pause and the seek slider. An **audio waveform** under each
+   player shows the loudness over time; click it to seek.
 5. **Mode** — the conversion recipe: Remux, H.264/AAC, H.265/AAC, VP9/Opus,
    ProRes/PCM, or Extract MP3 audio.
 6. **Format** — the output container (MP4/MOV/MKV/WebM/MP3); only valid choices
@@ -38,6 +39,8 @@ See the [User Guide](docs/USER_GUIDE.md) for step-by-step instructions.
   **VP9/Opus**, **ProRes/PCM**.
 - **Extract MP3 audio** (drop the video track).
 - **In-app video preview** of both the input and the converted output.
+- **Audio waveform graph** under each preview (dBFS peak envelope, playhead,
+  click-to-seek), so you can compare input vs output audio at a glance.
 - **Download from a URL** (YouTube and many sites) via a self-updating yt-dlp
   (**Update downloader** button), then convert.
 - **Trim**: convert only a selected portion of the video, capturing start/end
@@ -66,11 +69,11 @@ The app is a thin Qt GUI over separated, testable modules.
 ```
 app.py                      # Entry point: QApplication + MainWindow
 videoconverter/
-├── ffmpeg.py               # Tool discovery + ffprobe inspection (no Qt)
+├── ffmpeg.py               # Tool discovery, ffprobe inspection, waveform peaks (no Qt)
 ├── profiles.py             # FORMATS/PROFILES + argument builder + remux checks (no Qt)
 ├── conversion.py           # ConversionController: QProcess + progress parsing
 ├── downloader.py           # yt-dlp URL download + self-update (QThread workers)
-├── preview.py              # VideoPreview widget (Qt Multimedia)
+├── preview.py              # VideoPreview + AudioWaveform widgets (Qt Multimedia)
 └── main_window.py          # Layout and wiring
 bin/                        # Bundled ffmpeg / ffprobe (+ optional ffplay)
 docs/                       # User + format + algorithm + download documentation

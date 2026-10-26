@@ -75,6 +75,24 @@ def main():
             f"duration={src_info['duration']}",
         )
 
+        peaks = ffmpeg.read_waveform(source, points=200)
+        passed &= check(
+            "waveform: 200 points with audio",
+            len(peaks) == 200 and 0.05 < max(peaks) <= 1.0,
+            f"len={len(peaks)} max={max(peaks) if peaks else None}",
+        )
+
+        silent = os.path.join(work, "video_only.mp4")
+        result = _run([
+            ffmpeg.tool_path("ffmpeg"), "-y", "-i", source,
+            "-an", "-c:v", "copy", silent,
+        ])
+        passed &= check(
+            "waveform: empty for video-only file",
+            result.returncode == 0 and ffmpeg.read_waveform(silent) == [],
+            result.stderr[-400:],
+        )
+
         cases = [
             ("remux -> MOV", "remux", "MOV", "mov", None, None, None),
             ("remux -> MKV", "remux", "MKV", "mkv", None, None, None),

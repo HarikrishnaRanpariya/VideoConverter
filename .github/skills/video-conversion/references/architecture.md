@@ -8,11 +8,11 @@ package so UI, media logic, and FFmpeg orchestration stay separate.
 app.py                      # Entry point: creates QApplication + MainWindow
 videoconverter/
 ├── __init__.py             # App name, version, author, copyright metadata
-├── ffmpeg.py               # Tool discovery (ffmpeg/ffprobe/ffplay), probe, duration
+├── ffmpeg.py               # Tool discovery (ffmpeg/ffprobe/ffplay), probe, duration, waveform
 ├── profiles.py             # FORMATS + PROFILES, argument builder (trim/audio), remux checks
 ├── conversion.py           # ConversionController: runs FFmpeg via QProcess, emits signals
 ├── downloader.py           # yt-dlp binary fetch/update + DownloadWorker/UpdateWorker (QThread)
-├── preview.py              # VideoPreview widget (QMediaPlayer + QVideoWidget)
+├── preview.py              # VideoPreview (QMediaPlayer + QVideoWidget) + AudioWaveform graph
 └── main_window.py          # MainWindow: wires widgets, previews, trim, folder pickers
 ```
 
@@ -20,6 +20,10 @@ videoconverter/
 - **ffmpeg.py** — pure functions, no Qt. `tool_path()` resolves the bundled binary
   (adds `.exe` on Windows), `probe_media()` returns codecs/duration/resolution via
   `ffprobe -show_streams -of json`, `read_duration()` returns seconds.
+  `read_waveform(path, points, cancelled)` decodes the first audio track to
+  8 kHz mono s16le PCM over a pipe (`-map 0:a:0? -ac 1 -ar 8000 -f s16le`),
+  takes 10 ms absolute peaks, and max-reduces them to ≤ `points` values
+  (0.0–1.0); returns `[]` for files without audio.
 - **profiles.py** — pure data + one function. `FORMATS` describes containers;
   `PROFILES` describes codec recipes and which containers each allows.
   `build_arguments(job)` produces the FFmpeg argv list, including `-ss/-to` trim and
@@ -27,7 +31,11 @@ videoconverter/
 - **conversion.py** — `ConversionController(QObject)` owns the `QProcess`, parses
   progress, and emits `progress(int)`, `log(str)`, `finished(bool)`. No widgets.
 - **preview.py** — reusable player with play/pause, a seek slider, and
-  `set_start()/set_end()` helpers used by the trim UI.
+  `set_start()/set_end()` helpers used by the trim UI. Each `VideoPreview`
+  embeds an `AudioWaveform` below the video: it calls `read_waveform` on a
+  daemon thread (stale loads are cancelled by a generation counter), draws the
+  peak envelope on a −60…0 dBFS scale, tracks the player position as a
+  playhead, and emits `seek_requested(ms)` on click/drag.
 - **main_window.py** — only wiring/layout; delegates all real work to the modules above.
 
 ## Extension points
