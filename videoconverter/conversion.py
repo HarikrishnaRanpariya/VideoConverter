@@ -1,6 +1,10 @@
 """QProcess-based FFmpeg conversion controller and progress parsing."""
 
-from PySide6.QtCore import QObject, QProcess, QTimer, Signal
+import threading
+
+from PySide6.QtCore import QObject, QProcess, QTimer, Signal, Slot
+
+from . import ffmpeg
 
 
 def time_to_seconds(value):
@@ -106,3 +110,44 @@ class ConversionController(QObject):
             self.progress.emit(100)
         self.finished.emit(success)
         self._process = None
+
+
+class LoudnessAnalysisWorker(QObject):
+    """Pass 1 of loudness normalization; run on a ``QThread``.
+
+    Emits ``finished(success, result)`` where ``result`` is the measurement
+    dict on success, ``None`` when cancelled, or an error message.
+    """
+
+    progress = Signal(int)              # 0..100
+    finished = Signal(bool, object)
+
+    def __init__(self, input_file, loudnorm, start, end, duration):
+        super().__init__()
+        self._input_file = input_file
+        self._loudnorm = loudnorm
+        self._start = start
+        self._end = end
+        self._duration = duration
+        self._cancel = threading.Event()
+
+    def cancel(self):
+        self._cancel.set()
+
+    @Slot()
+    def run(self):
+        try:
+            result = ffmpeg.measure_loudness(
+                self._input_file,
+                self._loudnorm,
+                start=self._start,
+                end=self._end,
+                duration=self._duration,
+                progress=lambda fraction: self.progress.emit(int(fraction * 100)),
+                cancelled=self._cancel.is_set,
+            )
+        except Exception as error:
+            self.finished.emit(False, str(error))
+            return
+
+        self.finished.emit(result is not None, result)

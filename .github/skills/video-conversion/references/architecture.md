@@ -24,18 +24,27 @@ videoconverter/
   8 kHz mono s16le PCM over a pipe (`-map 0:a:0? -ac 1 -ar 8000 -f s16le`),
   takes 10 ms absolute peaks, and max-reduces them to ≤ `points` values
   (0.0–1.0); returns `[]` for files without audio.
+  `measure_loudness(path, loudnorm, start, end, duration, progress, cancelled)`
+  runs loudnorm pass 1 (`print_format=json`, `-f null -`) and returns
+  `input_i/tp/lra/thresh` + `target_offset`; raises `NoAudioError` when there
+  is no audio stream.
 - **profiles.py** — pure data + one function. `FORMATS` describes containers;
   `PROFILES` describes codec recipes and which containers each allows.
   `build_arguments(job)` produces the FFmpeg argv list, including `-ss/-to` trim and
   `-progress pipe:1`.
 - **conversion.py** — `ConversionController(QObject)` owns the `QProcess`, parses
   progress, and emits `progress(int)`, `log(str)`, `finished(bool)`. No widgets.
+  `LoudnessAnalysisWorker` runs loudness pass 1 on a `QThread`; `MainWindow`
+  runs it before the encode when an **Audio loudness** preset is selected and
+  stores the result in `ConversionJob.loudness_measured` for pass 2.
 - **preview.py** — reusable player with play/pause, a seek slider, and
   `set_start()/set_end()` helpers used by the trim UI. Each `VideoPreview`
   embeds an `AudioWaveform` below the video: it calls `read_waveform` on a
   daemon thread (stale loads are cancelled by a generation counter), draws the
   peak envelope on a −60…0 dBFS scale, tracks the player position as a
-  playhead, and emits `seek_requested(ms)` on click/drag.
+  playhead, and emits `seek_requested(ms)` on click/drag. After the peaks it
+  measures loudness and overlays `format_loudness()` text
+  (`loudness_changed` signal → log).
 - **main_window.py** — only wiring/layout; delegates all real work to the modules above.
 
 ## Extension points

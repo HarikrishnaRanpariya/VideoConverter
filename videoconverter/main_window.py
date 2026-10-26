@@ -23,9 +23,9 @@ from PySide6.QtWidgets import (
 )
 
 from . import ffmpeg, profiles
-from .conversion import ConversionController, time_to_seconds
+from .conversion import ConversionController, LoudnessAnalysisWorker, time_to_seconds
 from .downloader import DownloadWorker, UpdateWorker
-from .preview import VideoPreview
+from .preview import VideoPreview, format_loudness
 
 
 class MainWindow(QMainWindow):
@@ -37,6 +37,7 @@ class MainWindow(QMainWindow):
         self.input_duration = 0.0
         self.input_video_codec = None
         self.input_audio_codec = None
+        self.input_sample_rate = None
         self.controller = ConversionController(self)
         self.controller.progress.connect(self._on_progress)
         self.controller.log.connect(self._append_log)
@@ -46,6 +47,9 @@ class MainWindow(QMainWindow):
         self._download_worker = None
         self._update_thread = None
         self._update_worker = None
+        self._analysis_thread = None
+        self._analysis_worker = None
+        self._pending_job = None
         self._last_output_dir = None
         self._last_download_dir = None
 
@@ -126,6 +130,12 @@ class MainWindow(QMainWindow):
 
         self.input_preview = VideoPreview("Input preview")
         self.output_preview = VideoPreview("Output preview")
+        self.input_preview.waveform.loudness_changed.connect(
+            lambda value: self._log_loudness("Input", value)
+        )
+        self.output_preview.waveform.loudness_changed.connect(
+            lambda value: self._log_loudness("Output", value)
+        )
         layout.addWidget(self.input_preview)
         layout.addWidget(self.output_preview)
         return box
@@ -151,12 +161,19 @@ class MainWindow(QMainWindow):
         for height in (2160, 1440, 1080, 720, 480):
             self.scale_combo.addItem(f"{height}p", height)
 
+        self.loudness_combo = QComboBox()
+        self.loudness_combo.addItem("Keep original level", None)
+        for preset in profiles.LOUDNESS_PRESETS:
+            self.loudness_combo.addItem(preset.label, preset.key)
+
         grid.addWidget(QLabel("Mode:"), 0, 0)
         grid.addWidget(self.profile_combo, 0, 1)
         grid.addWidget(QLabel("Format:"), 1, 0)
         grid.addWidget(self.format_combo, 1, 1)
         grid.addWidget(QLabel("Resolution:"), 2, 0)
         grid.addWidget(self.scale_combo, 2, 1)
+        grid.addWidget(QLabel("Audio loudness:"), 3, 0)
+        grid.addWidget(self.loudness_combo, 3, 1)
         return group
 
     def _build_trim(self):
@@ -202,7 +219,7 @@ class MainWindow(QMainWindow):
         self.convert_button = QPushButton("Convert")
         self.convert_button.clicked.connect(self.start_conversion)
         self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.clicked.connect(self.controller.cancel)
+        self.cancel_button.clicked.connect(self.cancel_work)
         self.cancel_button.setEnabled(False)
 
         layout.addWidget(self.convert_button)
@@ -270,6 +287,26 @@ class MainWindow(QMainWindow):
         self.format_combo.blockSignals(False)
 
         self._update_output_extension()
+        self._update_loudness_enabled()
+
+    def _update_loudness_enabled(self):
+        profile = profiles.profile_by_key(self._current_profile_key())
+        allowed = profile is not None and not profile.copy
+        if not allowed:
+            self.loudness_combo.setCurrentIndex(0)
+        self.loudness_combo.setEnabled(allowed)
+        self.loudness_combo.setToolTip(
+            "Two-pass EBU R128 loudness normalization of the first audio "
+            "track: measures the input, then applies a clean gain (true-peak "
+            "limited only if needed) to hit the target."
+            if allowed
+            else "Remux copies audio untouched. Choose an encoding mode to "
+            "normalize loudness."
+        )
+
+    def _log_loudness(self, label, measurement):
+        if measurement:
+            self._append_log(f"{label} loudness: {format_loudness(measurement)}")
 
     def _update_output_extension(self):
         output_path = self.output_edit.text().strip()
@@ -323,6 +360,7 @@ class MainWindow(QMainWindow):
             self.input_duration = info["duration"]
             self.input_video_codec = info.get("video_codec")
             self.input_audio_codec = info.get("audio_codec")
+            self.input_sample_rate = info.get("sample_rate")
             self._append_log(
                 "Input: "
                 f"{info.get('video_codec')} / {info.get('audio_codec')} "
@@ -339,6 +377,7 @@ class MainWindow(QMainWindow):
             self.input_duration = 0.0
             self.input_video_codec = None
             self.input_audio_codec = None
+            self.input_sample_rate = None
             self._append_log(f"Could not read input details: {error}")
 
         fmt = profiles.format_by_name(self._current_format_name())
@@ -390,7 +429,7 @@ class MainWindow(QMainWindow):
             self._download_worker = None
 
         self.download_button.setEnabled(True)
-        self.convert_button.setEnabled(True)
+        self.convert_button.setEnabled(not self._busy())
 
         if success:
             self.status_label.setText("Download complete")
@@ -475,6 +514,9 @@ class MainWindow(QMainWindow):
         return max(0.0, end - start)
 
     def start_conversion(self):
+        if self._busy():
+            return
+
         input_file = self.input_edit.text().strip()
         output_file = self.output_edit.text().strip()
         ffmpeg_path = ffmpeg.tool_path("ffmpeg")
@@ -547,29 +589,141 @@ class MainWindow(QMainWindow):
             if self.trim_check.isChecked()
             else None,
             scale_height=self.scale_combo.currentData(),
+            loudness_key=self.loudness_combo.currentData()
+            if self.loudness_combo.isEnabled()
+            else None,
+            input_sample_rate=self.input_sample_rate,
         )
 
         try:
-            arguments = profiles.build_arguments(job)
+            profiles.build_arguments(job)
         except ValueError as error:
             QMessageBox.critical(self, "Invalid settings", str(error))
             return
 
-        self._pending_output = output_file
         self.log_edit.clear()
-        self.progress_bar.setValue(0)
         self.output_preview.clear()
+
+        if job.loudness_key and not self.input_audio_codec:
+            self._append_log("Input has no audio track; skipping loudness normalization.")
+            job.loudness_key = None
+
+        if job.loudness_key:
+            self._start_loudness_analysis(job)
+        else:
+            self._launch_conversion(job)
+
+    def _start_loudness_analysis(self, job):
+        """Pass 1/2: measure loudness of exactly the range that will be encoded."""
+        preset = profiles.loudness_preset_by_key(job.loudness_key)
+        self._pending_job = job
+
+        self.convert_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Pass 1/2: measuring loudness…")
+        self._append_log(
+            f"Pass 1/2: measuring loudness (target {preset.integrated:g} LUFS, "
+            f"true peak ≤ {preset.true_peak:g} dBTP)…"
+        )
+
+        self._analysis_thread = QThread(self)
+        self._analysis_worker = LoudnessAnalysisWorker(
+            job.input_file,
+            profiles.loudnorm_filter(preset),
+            job.start,
+            job.end,
+            self._target_duration(job),
+        )
+        self._analysis_worker.moveToThread(self._analysis_thread)
+        self._analysis_thread.started.connect(self._analysis_worker.run)
+        self._analysis_worker.progress.connect(self._on_analysis_progress)
+        self._analysis_worker.finished.connect(self._on_analysis_finished)
+        self._analysis_thread.start()
+
+    def _on_analysis_progress(self, percent):
+        self.progress_bar.setValue(percent)
+        self.status_label.setText(f"Pass 1/2: measuring loudness… {percent}%")
+
+    def _on_analysis_finished(self, success, result):
+        if self._analysis_thread is not None:
+            self._analysis_thread.quit()
+            self._analysis_thread.wait()
+            self._analysis_thread = None
+            self._analysis_worker = None
+
+        job, self._pending_job = self._pending_job, None
+
+        if not success:
+            self.convert_button.setEnabled(True)
+            self.cancel_button.setEnabled(False)
+            self.progress_bar.setValue(0)
+            if result is None:
+                self.status_label.setText("Cancelled")
+                self._append_log("Loudness measurement cancelled.")
+                return
+            self.status_label.setText("Loudness measurement failed")
+            self._append_log(f"Loudness measurement failed: {result}")
+            QMessageBox.critical(
+                self,
+                "Loudness measurement failed",
+                f"Could not measure the input loudness.\n\n{result}",
+            )
+            return
+
+        self._append_log(f"Measured input: {format_loudness(result)}")
+        if result["input_i"] <= profiles.LOUDNESS_SILENCE_LUFS:
+            self._append_log(
+                "Input audio is silent; converting without loudness normalization."
+            )
+            job.loudness_key = None
+        else:
+            job.loudness_measured = result
+        self._launch_conversion(job)
+
+    def _launch_conversion(self, job):
+        ffmpeg_path = ffmpeg.tool_path("ffmpeg")
+        try:
+            arguments = profiles.build_arguments(job)
+        except ValueError as error:
+            self.convert_button.setEnabled(True)
+            self.cancel_button.setEnabled(False)
+            QMessageBox.critical(self, "Invalid settings", str(error))
+            return
+
+        self._pending_output = job.output_file
+        self.progress_bar.setValue(0)
         self._append_log(f"Program: {ffmpeg_path}")
         self._append_log("Arguments: " + " ".join(arguments))
         self._append_log("")
 
         self.convert_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
-        self.status_label.setText("Converting…")
+        self.status_label.setText(
+            "Pass 2/2: converting…" if job.loudness_measured else "Converting…"
+        )
 
         self.controller.start(
             ffmpeg_path, arguments, self._target_duration(job)
         )
+
+    def cancel_work(self):
+        if self._analysis_worker is not None:
+            self._analysis_worker.cancel()
+        self.controller.cancel()
+
+    def _busy(self):
+        """True while loudness pass 1 or an FFmpeg conversion is running."""
+        return self._analysis_thread is not None or self.controller.running
+
+    def closeEvent(self, event):
+        self.input_preview.waveform.clear()
+        self.output_preview.waveform.clear()
+        if self._analysis_thread is not None:
+            self._analysis_worker.cancel()
+            self._analysis_thread.quit()
+            self._analysis_thread.wait(5000)
+        super().closeEvent(event)
 
     # -- Controller callbacks ----------------------------------------------
 

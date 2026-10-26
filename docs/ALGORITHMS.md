@@ -102,6 +102,47 @@ sound to an MP3:
 `-vn` removes video; `-q:a 2` is high-quality VBR (~190 kbps). Trimming works,
 so you can export just a clip's audio. (Fails if the source has no audio.)
 
+## Loudness normalization (EBU R128)
+
+Loudness is measured in **LUFS** (ITU-R BS.1770: K-weighted, gated), not peak
+level, because that is what listeners perceive and what platforms normalize to.
+The app uses FFmpeg's `loudnorm` filter in **two passes**:
+
+1. **Measure** — the first audio track (only the trimmed range, if set) is
+   decoded with no output:
+   ```
+   -ss S -to E -i in -map 0:a:0 -vn -af loudnorm=I=-14:TP=-1:LRA=11:print_format=json -f null -
+   ```
+   (`-ss`/`-to` go *before* `-i` here: as output options they trim after the
+   filter, so the audio before the start point would be measured too.)
+   This reports integrated loudness (`input_i`), true peak (`input_tp`),
+   loudness range (`input_lra`), gating threshold, and `target_offset`.
+2. **Apply** — the measured values are fed back so `loudnorm` can apply a single
+   clean **linear gain** instead of its real-time dynamic mode:
+   ```
+   -filter:a:0 loudnorm=I=-14:TP=-1:LRA=<max(target, measured)>:measured_I=…:measured_TP=…:measured_LRA=…:measured_thresh=…:offset=…:linear=true -ar:a:0 48000
+   ```
+
+Details that matter for quality:
+
+- **Linear vs dynamic.** Linear mode only engages if `measured_LRA ≤ target LRA`
+  and the gain won't push the true peak over the ceiling. The app widens the
+  target LRA to the source's own range so dynamics are never compressed just
+  to satisfy LRA. If the gain *would* exceed the true-peak ceiling, `loudnorm`
+  falls back to dynamic mode (look-ahead true-peak limiting) — the log shows
+  `Normalization Type: Linear` or `Dynamic`.
+- **Sample rate.** `loudnorm` upsamples to 192 kHz internally for true-peak
+  detection, so the output is resampled back (`-ar`): 44.1/48 kHz sources keep
+  their rate; Opus always uses 48 kHz.
+- **Silence** (≤ −70 LUFS) is never amplified; normalization is skipped.
+- **Remux** can't normalize (audio must be re-encoded).
+
+| Preset | Integrated | True peak | Use |
+|--------|-----------:|----------:|-----|
+| Streaming | −14 LUFS | −1 dBTP | YouTube, Spotify, social |
+| Podcast | −16 LUFS | −1 dBTP | Apple Podcasts, mobile |
+| Broadcast | −23 LUFS | −1 dBTP | EBU R128 TV/radio |
+
 ## Decision summary
 
 ```

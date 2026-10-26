@@ -25,6 +25,7 @@ _Copyright © 2026 Harikrishna Ranpariya._
 6. **Format** — the output container (MP4/MOV/MKV/WebM/MP3); only valid choices
    for the selected mode are shown.
 7. **Resolution** — keep the original size or downscale (2160p → 480p).
+   **Audio loudness** — optionally normalize to −14/−16/−23 LUFS.
 8. **Trim (optional)** — tick to convert only a selected range; capture Start/End
    from the input preview.
 9. **Convert / Cancel** — start or stop the conversion.
@@ -40,7 +41,11 @@ See the [User Guide](docs/USER_GUIDE.md) for step-by-step instructions.
 - **Extract MP3 audio** (drop the video track).
 - **In-app video preview** of both the input and the converted output.
 - **Audio waveform graph** under each preview (dBFS peak envelope, playhead,
-  click-to-seek), so you can compare input vs output audio at a glance.
+  click-to-seek) with an **EBU R128 loudness readout** (LUFS / true peak /
+  LRA), so you can compare input vs output audio at a glance.
+- **Loudness normalization** — two-pass EBU R128 (`loudnorm`) to −14 LUFS
+  (YouTube/Spotify), −16 LUFS (podcasts), or −23 LUFS (broadcast), with a
+  −1 dBTP true-peak ceiling; applies a clean linear gain whenever possible.
 - **Download from a URL** (YouTube and many sites) via a self-updating yt-dlp
   (**Update downloader** button), then convert.
 - **Trim**: convert only a selected portion of the video, capturing start/end

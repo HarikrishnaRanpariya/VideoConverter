@@ -166,6 +166,86 @@ def remux_incompatibilities(format_name, video_codec, audio_codec):
     return problems
 
 
+# --- Loudness normalization (EBU R128 / ITU-R BS.1770) ------------------------
+
+@dataclass(frozen=True)
+class LoudnessPreset:
+    """An integrated-loudness delivery target for FFmpeg's ``loudnorm``."""
+
+    key: str
+    label: str
+    integrated: float   # target integrated loudness, LUFS
+    true_peak: float    # maximum true peak, dBTP
+    lra: float          # target loudness range, LU
+
+
+LOUDNESS_PRESETS = [
+    LoudnessPreset("streaming", "−14 LUFS · YouTube / Spotify / social", -14.0, -1.0, 11.0),
+    LoudnessPreset("podcast", "−16 LUFS · Apple Podcasts / mobile", -16.0, -1.0, 11.0),
+    LoudnessPreset("broadcast", "−23 LUFS · EBU R128 broadcast TV", -23.0, -1.0, 15.0),
+]
+
+# Below this the input is effectively silent and must not be amplified.
+LOUDNESS_SILENCE_LUFS = -70.0
+
+
+def loudness_preset_by_key(key):
+    for preset in LOUDNESS_PRESETS:
+        if preset.key == key:
+            return preset
+    return None
+
+
+def _clamp(value, low, high):
+    return max(low, min(high, float(value)))
+
+
+def loudnorm_filter(preset, measured=None, print_format=None):
+    """Build a ``loudnorm`` filter string for ``preset``.
+
+    Without ``measured`` this is a single-pass (dynamic) normalization. With
+    the pass-1 measurement (keys ``input_i``, ``input_tp``, ``input_lra``,
+    ``input_thresh``, ``target_offset``) it becomes the accurate second pass,
+    which applies a pure linear gain whenever the true-peak ceiling allows.
+    """
+    options = [
+        f"I={preset.integrated:g}",
+        f"TP={preset.true_peak:g}",
+    ]
+
+    if measured:
+        measured_lra = _clamp(measured["input_lra"], 0.0, 99.0)
+        # loudnorm only stays linear when measured LRA <= target LRA, so widen
+        # the target to the source's own range rather than compressing it.
+        target_lra = _clamp(max(preset.lra, measured_lra), 1.0, 50.0)
+        options += [
+            f"LRA={target_lra:g}",
+            f"measured_I={_clamp(measured['input_i'], -99.0, 0.0):.2f}",
+            f"measured_TP={_clamp(measured['input_tp'], -99.0, 99.0):.2f}",
+            # 0 means "not measured" to loudnorm; a steady tone really is 0 LU.
+            f"measured_LRA={max(0.01, measured_lra):.2f}",
+            f"measured_thresh={_clamp(measured['input_thresh'], -99.0, 0.0):.2f}",
+            f"offset={_clamp(measured['target_offset'], -99.0, 99.0):.2f}",
+            "linear=true",
+        ]
+    else:
+        options.append(f"LRA={preset.lra:g}")
+
+    if print_format:
+        options.append(f"print_format={print_format}")
+
+    return "loudnorm=" + ":".join(options)
+
+
+def loudnorm_output_rate(profile, input_rate=None):
+    """Sample rate to resample to after ``loudnorm`` (it upsamples to 192 kHz)."""
+    if "libopus" in profile.audio_args:
+        return 48000
+    if input_rate in (44100, 48000):
+        return input_rate
+    return 48000
+
+
 
 # --- Job + argument builder ------------------------------------------------
 
@@ -178,10 +258,29 @@ class ConversionJob:
     start: Optional[str] = None   # "HH:MM:SS.mmm" or None
     end: Optional[str] = None     # "HH:MM:SS.mmm" or None
     scale_height: Optional[int] = None  # e.g. 720 to downscale; None keeps size
+    loudness_key: Optional[str] = None  # LoudnessPreset key; None keeps level
+    loudness_measured: Optional[dict] = None  # pass-1 loudnorm measurement
+    input_sample_rate: Optional[int] = None
 
     @property
     def has_range(self):
         return bool(self.start or self.end)
+
+
+def _audio_filter_args(job, profile):
+    if not job.loudness_key:
+        return []
+
+    preset = loudness_preset_by_key(job.loudness_key)
+    if preset is None:
+        raise ValueError(f"Unknown loudness preset '{job.loudness_key}'.")
+
+    rate = loudnorm_output_rate(profile, job.input_sample_rate)
+    # Only the first audio track is measured, so only that track is normalized.
+    return [
+        "-filter:a:0", loudnorm_filter(preset, job.loudness_measured, "summary"),
+        "-ar:a:0", str(rate),
+    ]
 
 
 def build_arguments(job: ConversionJob):
@@ -191,6 +290,12 @@ def build_arguments(job: ConversionJob):
 
     if profile is None or fmt is None:
         raise ValueError("Unknown profile or format.")
+
+    if profile.copy and job.loudness_key:
+        raise ValueError(
+            "Loudness normalization re-encodes the audio, so it can't be used "
+            "with Remux. Choose an encoding mode such as H.264 / AAC."
+        )
 
     arguments = ["-y", "-nostdin", "-i", job.input_file]
 
@@ -206,6 +311,7 @@ def build_arguments(job: ConversionJob):
         # Drop video; take the first audio stream and encode it.
         arguments += ["-vn", "-map", "0:a:0"]
         arguments += list(profile.audio_args)
+        arguments += _audio_filter_args(job, profile)
     else:
         arguments += ["-map", "0:v:0", "-map", "0:a?"]
         arguments += list(profile.video_args)
@@ -214,6 +320,7 @@ def build_arguments(job: ConversionJob):
             arguments += ["-vf", f"scale=-2:{job.scale_height}"]
 
         arguments += list(profile.audio_args)
+        arguments += _audio_filter_args(job, profile)
 
         if profile.faststart and fmt.extension in ("mp4", "mov"):
             arguments += ["-movflags", "+faststart"]

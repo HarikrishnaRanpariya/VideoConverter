@@ -58,6 +58,21 @@ Drop the video and encode a single audio stream into an audio container:
 `-vn -map 0:a:0 -c:a libmp3lame -q:a 2` (MP3). No scaling, no faststart; trim
 (`-ss`/`-to`) still applies. Fails if the input has no audio stream.
 
+## 8. Loudness normalization (two-pass loudnorm)
+Presets live in `LOUDNESS_PRESETS` (`profiles.py`): −14 LUFS streaming, −16 podcast,
+−23 EBU R128 broadcast; all TP −1 dBTP.
+- **Pass 1**: `ffmpeg.measure_loudness()` runs `-ss S -to E -i in -map 0:a:0 -af loudnorm=…:print_format=json
+  -f null -`. Seek on the **input** side: output-side `-ss/-to` trims *after* `-af`,
+  so loudnorm would also measure the pre-roll. Parse the trailing JSON
+  (`input_i/tp/lra/thresh`, `target_offset`).
+- **Pass 2**: `profiles.loudnorm_filter(preset, measured)` → `-filter:a:0 loudnorm=…:measured_*=…:offset=…:linear=true`
+  plus `-ar:a:0` (loudnorm outputs 192 kHz; keep 44.1/48 k, Opus → 48 k).
+- Linear mode needs `measured_LRA ≤ LRA` and `measured_TP + gain ≤ TP`; set
+  `LRA = max(preset, measured)` (cap 50). `measured_LRA` of 0 means "unset" to
+  loudnorm, so pass ≥ 0.01. Otherwise loudnorm uses dynamic (limiting) mode.
+- Skip when input ≤ −70 LUFS (silence) or there is no audio; reject for remux.
+- Only the first audio track is measured and normalized.
+
 ## Decision guide
 1. Same codecs already legal in target container? → **remux** (`-c copy`).
 2. Only audio incompatible? → copy video, transcode audio.

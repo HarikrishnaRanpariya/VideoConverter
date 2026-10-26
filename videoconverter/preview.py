@@ -56,16 +56,32 @@ def peak_to_height(peak):
 
 class _WaveformSignals(QObject):
     loaded = Signal(int, object)
+    loudness_loaded = Signal(int, object)
+
+
+def format_loudness(measurement):
+    """``-14.0 LUFS · peak -1.0 dBTP · LRA 5.2 LU`` (or ``silent``)."""
+    if not measurement:
+        return ""
+    integrated = measurement.get("input_i", float("-inf"))
+    if not math.isfinite(integrated) or integrated <= -70.0:
+        return "silent"
+    return (
+        f"{integrated:.1f} LUFS · peak {measurement['input_tp']:.1f} dBTP"
+        f" · LRA {measurement['input_lra']:.1f} LU"
+    )
 
 
 class AudioWaveform(QWidget):
     """Peak-envelope graph of a file's first audio track with a playhead.
 
-    The waveform is decoded by FFmpeg on a background thread. Clicking or
-    dragging emits :attr:`seek_requested` (milliseconds).
+    The waveform and an EBU R128 loudness readout are computed by FFmpeg on a
+    background thread. Clicking or dragging emits :attr:`seek_requested`
+    (milliseconds).
     """
 
     seek_requested = Signal(int)
+    loudness_changed = Signal(object)
 
     _BACKGROUND = QColor(30, 30, 34)
     _WAVE = QColor(90, 160, 230)
@@ -82,6 +98,7 @@ class AudioWaveform(QWidget):
         self.setToolTip("Audio waveform (dBFS). Click or drag to seek.")
 
         self._peaks = []
+        self._loudness = None
         self._message = "No file loaded"
         self._duration = 0
         self._position = 0
@@ -90,6 +107,7 @@ class AudioWaveform(QWidget):
 
         self._signals = _WaveformSignals(self)
         self._signals.loaded.connect(self._on_loaded)
+        self._signals.loudness_loaded.connect(self._on_loudness)
 
     # -- Public API ---------------------------------------------------------
 
@@ -104,6 +122,12 @@ class AudioWaveform(QWidget):
         signals = self._signals
         points = max(400, min(2000, self.width() * 2))
 
+        def emit(signal, value):
+            try:
+                signal.emit(generation, value)
+            except RuntimeError:  # widget already destroyed
+                pass
+
         def work():
             try:
                 peaks = ffmpeg.read_waveform(file_path, points, cancel.is_set)
@@ -111,10 +135,18 @@ class AudioWaveform(QWidget):
                 peaks = False
             if peaks is None or cancel.is_set():
                 return
+            emit(signals.loaded, peaks)
+            if not peaks:
+                return
+
             try:
-                signals.loaded.emit(generation, peaks)
-            except RuntimeError:  # widget already destroyed
-                pass
+                loudness = ffmpeg.measure_loudness(
+                    file_path, cancelled=cancel.is_set
+                )
+            except Exception:
+                return
+            if loudness is not None and not cancel.is_set():
+                emit(signals.loudness_loaded, loudness)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -136,6 +168,10 @@ class AudioWaveform(QWidget):
     def peaks(self):
         return list(self._peaks)
 
+    def loudness(self):
+        """Latest loudnorm measurement dict for the loaded file, or ``None``."""
+        return dict(self._loudness) if self._loudness else None
+
     # -- Internals ----------------------------------------------------------
 
     def _start_generation(self):
@@ -144,6 +180,16 @@ class AudioWaveform(QWidget):
         self._cancel = threading.Event()
         self._generation += 1
         self._peaks = []
+        if self._loudness is not None:
+            self._loudness = None
+            self.loudness_changed.emit(None)
+
+    def _on_loudness(self, generation, loudness):
+        if generation != self._generation:
+            return
+        self._loudness = loudness
+        self.loudness_changed.emit(loudness)
+        self.update()
 
     def _on_loaded(self, generation, peaks):
         if generation != self._generation:
@@ -219,6 +265,18 @@ class AudioWaveform(QWidget):
 
             painter.setPen(QPen(self._PLAYHEAD, 2))
             painter.drawLine(QPointF(playhead_x, 0), QPointF(playhead_x, height))
+
+        text = format_loudness(self._loudness)
+        if text:
+            metrics = painter.fontMetrics()
+            box = QRectF(
+                4, 4, metrics.horizontalAdvance(text) + 10, metrics.height() + 4
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 160))
+            painter.drawRoundedRect(box, 3, 3)
+            painter.setPen(QColor(235, 235, 240))
+            painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
 
 
 class VideoPreview(QWidget):

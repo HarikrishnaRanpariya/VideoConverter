@@ -30,6 +30,7 @@ If a warning says **FFmpeg not found**, make sure `ffmpeg` and `ffprobe`
 | **Mode** | The conversion recipe (see §3). |
 | **Format** | The output container (MP4, MOV, MKV, WebM, MP3). |
 | **Resolution** | Keep original size or downscale (1080p, 720p, …). |
+| **Audio loudness** | Make the volume a standard level (−14/−16/−23 LUFS) — see §5a. |
 | **Trim** | Convert only a chosen part of the video. |
 | **Convert / Cancel** | Start or stop the conversion. |
 | **Progress + log** | Live percentage and the raw FFmpeg messages. |
@@ -70,6 +71,29 @@ If a warning says **FFmpeg not found**, make sure `ffmpeg` and `ffprobe`
 3. The video track is discarded and a high-quality MP3 is written. Trimming
    works here too. (A video with no audio track can't be extracted.)
 
+## 5a. Making the volume consistent (loudness normalization)
+
+Videos from different cameras, phones, or downloads are often much quieter or
+louder than each other. **Audio loudness** fixes that to a standard level:
+
+| Choice | Use it for |
+|--------|------------|
+| **Keep original level** | No change (default). |
+| **−14 LUFS · YouTube / Spotify / social** | Uploading to streaming and social platforms. |
+| **−16 LUFS · Apple Podcasts / mobile** | Podcasts and phone listening. |
+| **−23 LUFS · EBU R128 broadcast TV** | Broadcast delivery. |
+
+1. Choose an encoding **Mode** (not Remux — it can't change audio).
+2. Pick an **Audio loudness** target and click **Convert**.
+3. The app runs two passes: **Pass 1/2** measures the loudness (of only the
+   trimmed range, if Trim is on), **Pass 2/2** converts with the exact gain.
+4. Compare the readout on the input and output waveforms, e.g.
+   `-25.1 LUFS` → `-14.0 LUFS`.
+
+The volume is changed cleanly without squashing the dynamics. Only if raising
+the volume would clip the loudest peaks does the app gently limit those peaks
+(true peak never exceeds −1 dBTP). Silent audio is left alone.
+
 ## 6. Downloading from a URL
 
 > ⚠️ Only download content you have the right to use. Downloading third-party
@@ -96,7 +120,9 @@ click **Update downloader** to fetch the latest engine, then try again.
 - The **left** preview shows your input; the **right** preview loads the
   converted file automatically when done.
 - Use **Play/Pause** and drag the slider to seek.
-- Below each video is an **audio waveform** of the file's first audio track.
+- Below each video is an **audio waveform** of the file's first audio track,
+  with a **loudness readout** in the corner (integrated LUFS, true peak in
+  dBTP, and loudness range in LU — the same values are written to the log).
   The height is the peak level on a decibel scale (top/bottom edge = 0 dBFS,
   center line = −60 dB or quieter), so the input and output graphs can be
   compared directly — e.g. to spot clipped, missing, or much quieter audio.

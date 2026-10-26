@@ -93,6 +93,89 @@ def main():
             result.stderr[-400:],
         )
 
+        try:
+            profiles.build_arguments(profiles.ConversionJob(
+                source, os.path.join(work, "x.mp4"), "remux", "MP4",
+                loudness_key="streaming",
+            ))
+            rejected = False
+        except ValueError:
+            rejected = True
+        passed &= check("loudness: rejected with remux", rejected)
+
+        # Two-pass EBU R128 normalization must land within ±1 LU of target
+        # and respect the true-peak ceiling.
+        for key, fmt, ext, preset_key in (
+            ("h264", "MP4", "mp4", "streaming"),
+            ("mp3_audio", "MP3", "mp3", "podcast"),
+            ("vp9", "WebM", "webm", "broadcast"),
+        ):
+            preset = profiles.loudness_preset_by_key(preset_key)
+            label = f"loudness {preset.integrated:g} LUFS -> {fmt}"
+            measured = ffmpeg.measure_loudness(
+                source, profiles.loudnorm_filter(preset)
+            )
+            out = os.path.join(work, f"loud_{preset_key}.{ext}")
+            job = profiles.ConversionJob(
+                input_file=source,
+                output_file=out,
+                profile_key=key,
+                format_name=fmt,
+                loudness_key=preset_key,
+                loudness_measured=measured,
+                input_sample_rate=src_info["sample_rate"],
+            )
+            result = convert(job)
+            if not check(f"{label}: ffmpeg exit 0", result.returncode == 0,
+                         result.stderr[-400:]):
+                passed = False
+                continue
+            out_loudness = ffmpeg.measure_loudness(out)
+            passed &= check(
+                f"{label}: integrated within ±1 LU",
+                abs(out_loudness["input_i"] - preset.integrated) <= 1.0,
+                f"got {out_loudness['input_i']}",
+            )
+            passed &= check(
+                f"{label}: true peak <= {preset.true_peak:g} dBTP",
+                out_loudness["input_tp"] <= preset.true_peak + 0.5,
+                f"got {out_loudness['input_tp']}",
+            )
+
+        # Trimmed normalization must measure only the selected range: quieter
+        # first half (kept by the R128 relative gate), louder second half,
+        # trim to the louder half.
+        stepped = os.path.join(work, "stepped.mp4")
+        result = _run([
+            ffmpeg.tool_path("ffmpeg"), "-y",
+            "-f", "lavfi", "-i", "testsrc=duration=4:size=320x240:rate=30",
+            "-f", "lavfi", "-i",
+            "sine=frequency=440:duration=4,volume='if(lt(t,2),0.2,0.6)':eval=frame",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            "-shortest", stepped,
+        ])
+        preset = profiles.loudness_preset_by_key("streaming")
+        measured = ffmpeg.measure_loudness(
+            stepped, profiles.loudnorm_filter(preset),
+            start="00:00:02.000", end="00:00:04.000",
+        )
+        out = os.path.join(work, "stepped_trim.mp4")
+        result = convert(profiles.ConversionJob(
+            input_file=stepped, output_file=out, profile_key="h264",
+            format_name="MP4", start="00:00:02.000", end="00:00:04.000",
+            loudness_key="streaming", loudness_measured=measured,
+            input_sample_rate=ffmpeg.probe_media(stepped)["sample_rate"],
+        ))
+        out_i = (
+            ffmpeg.measure_loudness(out)["input_i"]
+            if result.returncode == 0 else None
+        )
+        passed &= check(
+            "loudness with trim: measures only the range (±0.5 LU)",
+            out_i is not None and abs(out_i - preset.integrated) <= 0.5,
+            f"got {out_i}",
+        )
+
         cases = [
             ("remux -> MOV", "remux", "MOV", "mov", None, None, None),
             ("remux -> MKV", "remux", "MKV", "mkv", None, None, None),
